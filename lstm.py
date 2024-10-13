@@ -153,7 +153,12 @@ def visualize_predictions(model, val_loader, sequence_length, mean, std):
     plt.xlabel(f'Time Steps (each step = {sequence_length} days)')
     plt.ylabel('Quantity')
     plt.legend()
-    plt.show()
+    # Save the figure to log on wandb
+    plt_path = "predictions_vs_actuals.png"
+    plt.savefig(plt_path)
+
+    # Log the plot on wandb
+    wandb.log({"Predictions vs Actuals": wandb.Image(plt_path)})
 
 # Load best model for visualization
 model.load_state_dict(torch.load(best_model_path))
