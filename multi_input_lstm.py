@@ -57,7 +57,7 @@ def create_sequences(data, seq_length):
     sequences = []
     for i in range(len(data) - seq_length):
         seq = data[i:i + seq_length]
-        label = data[i + seq_length]
+        label = data[i + seq_length][0]
         sequences.append((seq, label))
     return sequences
 
@@ -74,7 +74,7 @@ cfg = {
     'batch_size': 16,
 
     # LSTM hyperparameter
-    'hidden_size': 64,
+    'hidden_size': 128,
     'num_layers': 2,
 
     # Optimization hyper
@@ -103,20 +103,33 @@ if cfg['project_name'] is not None:
 # Data Preparation
 ##########################################
 df = pd.read_csv(os.path.join('.', 'data', f'{data_name}.csv'))
-df['Quantity'] = df['Quantity'].str.replace(',', '').str.strip().astype(float)
-
+df = df.drop(columns=['Date'])
+##########################################
+### Data preprocessing
+##########################################
+for col in df.select_dtypes(include=['object', 'string']).columns:
+    df[col] = df[col].str.replace(',', '').str.strip().astype(float)
+    
 train_df = df[:-cfg['val_size'] + cfg['sequence_length']]
 val_df = df[-cfg['val_size']:]
 
-mean = train_df['Quantity'].mean()
-std = train_df['Quantity'].std()
-train_df['Quantity'] = (train_df['Quantity'] - mean) / std
-val_df['Quantity'] = (val_df['Quantity'] - mean) / std
+not_normalized_columns = ['weather'] 
 
-train_data = create_sequences(train_df['Quantity'].values, cfg['sequence_length'])
-val_data = create_sequences(val_df['Quantity'].values, cfg['sequence_length'])
+mean_values = df.drop(columns=not_normalized_columns).mean()
+std_values = df.drop(columns=not_normalized_columns).std()
 
-# Create a DataLoader
+for column, mean, std in zip(mean_values.index, mean_values.values, std_values.values):
+    train_df[column] = (train_df[column] - mean) / std
+    val_df[column] = (val_df[column] - mean) / std
+
+train_df, val_df = train_df.to_numpy(), val_df.to_numpy()
+
+train_data = create_sequences(train_df, cfg['sequence_length'])
+val_data = create_sequences(val_df, cfg['sequence_length'])
+
+##########################################
+### Create a DataLoader
+##########################################
 train_dataset = TimeSeriesDataset(train_data)
 val_dataset = TimeSeriesDataset(val_data)
 train_loader = DataLoader(train_dataset, batch_size=cfg['batch_size'], shuffle=True)
@@ -126,7 +139,7 @@ val_loader = DataLoader(val_dataset, batch_size=10, shuffle=False)
 # Define the LSTM model
 ##########################################
 class LSTMModel(nn.Module):
-    def __init__(self, input_size=1, hidden_size=50, num_layers=2, output_size=1):
+    def __init__(self, input_size=12, hidden_size=50, num_layers=2, output_size=1):
         super(LSTMModel, self).__init__()
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
         self.fc = nn.Linear(hidden_size, output_size)
@@ -146,7 +159,6 @@ for epoch in range(cfg['num_epochs']):
     total_loss = 0
     
     for batch_idx, (sequences, labels) in enumerate(train_loader):
-        sequences = sequences.unsqueeze(-1)  # Add input size dimension
         outputs = model(sequences)
         loss = criterion(outputs, labels)
         total_loss += loss.item()
@@ -161,13 +173,12 @@ for epoch in range(cfg['num_epochs']):
     model.eval()
     with torch.no_grad():
         for batch_idx, (sequences, labels) in enumerate(val_loader):
-            sequences = sequences.unsqueeze(-1)  # Add input size dimension
             outputs = model(sequences)
             loss = criterion(outputs, labels)
             val_total_loss += loss.item()
             
     val_avg_loss = val_total_loss / (batch_idx + 1)
-    print(f'Epoch [{epoch+1}/{num_epochs}], Validaation Loss: {val_avg_loss:.4f}')
+    print(f'Epoch [{epoch+1}/{num_epochs}], Validation Loss: {val_avg_loss:.4f}')
     # Save best model based on validation loss
     if val_avg_loss < best_val_loss:
         best_val_loss = val_avg_loss
@@ -190,7 +201,6 @@ def visualize_predictions(model, val_loader, sequence_length, mean, std):
 
     with torch.no_grad():
         for sequences, labels in val_loader:
-            sequences = sequences.unsqueeze(-1)  # Add input size dimension
             outputs = model(sequences)
             predictions.extend(outputs.squeeze().numpy())
             actuals.extend(labels.numpy())
@@ -214,4 +224,4 @@ def visualize_predictions(model, val_loader, sequence_length, mean, std):
 
 # Load best model for visualization
 model.load_state_dict(torch.load(best_model_path))
-visualize_predictions(model, val_loader, cfg['sequence_length'], mean, std)
+visualize_predictions(model, val_loader, cfg['sequence_length'], mean_values.iloc[0], std_values.iloc[0])
